@@ -1,0 +1,17 @@
+[package]
+name = "grapple-config"
+version = "0.1.0"
+edition = "2021"
+description = "Grapple Robotics' configuration structs and traits for use on embedded-hal projects"
+repository = "https://github.com/GrappleRobotics/grapple-config"
+readme = "README.md"
+authors = ["Jaci Brunning"]
+license = "MIT"
+
+[features]
+m24c64 = ["dep:grapple-m24c64"]
+
+[dependencies]
+deku = "0.16.0"
+embedded-hal = "0.2.7"
+grapple-m24c64 = { version = "0.1.1", optional = true }
