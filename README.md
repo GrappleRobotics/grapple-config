@@ -1,4 +1,4 @@
-# grapple-m24c64
+# grapple-config
 [![crates.io](https://img.shields.io/crates/v/grapple-config.svg)](https://crates.io/crates/grapple-config)
 [![Documentation](https://docs.rs/grapple-config/badge.svg)](https://docs.rs/grapple-config)
 

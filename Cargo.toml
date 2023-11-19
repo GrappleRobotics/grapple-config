@@ -3,6 +3,7 @@ name = "grapple-config"
 version = "0.1.0"
 edition = "2021"
 description = "Grapple Robotics' configuration structs and traits for use on embedded-hal projects"
+documentation = "https://docs.rs/grapple-config"
 repository = "https://github.com/GrappleRobotics/grapple-config"
 readme = "README.md"
 authors = ["Jaci Brunning"]
