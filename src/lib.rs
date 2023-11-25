@@ -2,7 +2,7 @@
 
 #![doc = include_str!("../README.md")]
 
-use core::convert::Infallible;
+use core::{convert::Infallible, marker::PhantomData};
 
 pub trait ConfigurationMarshal<Config>
 {
@@ -57,15 +57,15 @@ where
   }
 }
 
-pub struct VolatileMarshal;
+pub struct VolatileMarshal<Config>(PhantomData<Config>);
 
-impl VolatileMarshal {
+impl<Config> VolatileMarshal<Config> {
   pub fn new() -> Self {
-    Self {}
+    Self(PhantomData)
   }
 }
 
-impl<Config> ConfigurationMarshal<Config> for VolatileMarshal
+impl<Config> ConfigurationMarshal<Config> for VolatileMarshal<Config>
 where
   Config: Default
 {
@@ -84,17 +84,20 @@ where
 pub mod m24c64 {
   extern crate alloc;
 
-  use binmarshal::{BinMarshal, rw::{VecBitWriter, BitWriter, BitView}};
+  use core::marker::PhantomData;
+
+use binmarshal::{BinMarshal, rw::{VecBitWriter, BitWriter, BitView}};
   use embedded_hal::blocking::{i2c, delay::DelayMs};
   use grapple_m24c64::M24C64;
   use alloc::vec;
 
   use crate::ConfigurationMarshal;
 
-  pub struct M24C64ConfigurationMarshal<I2C, Delay> {
+  pub struct M24C64ConfigurationMarshal<Config, I2C, Delay> {
     delay: Delay,
     address_offset: usize,
-    eeprom: M24C64<I2C>
+    eeprom: M24C64<I2C>,
+    marker: PhantomData<Config>
   }
 
   pub enum M24C64ConfigurationError<E> {
@@ -103,14 +106,14 @@ pub mod m24c64 {
     BlankEeprom
   }
 
-  impl<I2C, Delay> M24C64ConfigurationMarshal<I2C, Delay> {
+  impl<Config, I2C, Delay> M24C64ConfigurationMarshal<Config, I2C, Delay> {
     #[allow(unused)]
-    pub fn new(eeprom: M24C64<I2C>, address: usize, delay: Delay) -> Self {
-      Self { delay, address_offset: address, eeprom }
+    pub fn new(eeprom: M24C64<I2C>, address: usize, delay: Delay, marker: PhantomData<Config>) -> Self {
+      Self { delay, address_offset: address, eeprom, marker }
     }
   }
 
-  impl<'a, I2C, Delay, Config, E> ConfigurationMarshal<Config> for M24C64ConfigurationMarshal<I2C, Delay>
+  impl<'a, I2C, Delay, Config, E> ConfigurationMarshal<Config> for M24C64ConfigurationMarshal<Config, I2C, Delay>
   where
     Config: BinMarshal + Default + Clone,
     I2C: i2c::Write<u8, Error = E> + i2c::WriteRead<u8, Error = E>,
