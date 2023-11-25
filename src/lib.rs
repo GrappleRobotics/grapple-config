@@ -84,10 +84,10 @@ where
 mod m24c64 {
   extern crate alloc;
 
-  use deku::{DekuContainerRead, DekuContainerWrite, DekuError};
+  use binmarshal::{BinMarshal, rw::{VecBitWriter, BitWriter, BitView}};
   use embedded_hal::blocking::{i2c, delay::DelayMs};
   use grapple_m24c64::M24C64;
-  use alloc::{vec, vec::Vec};
+  use alloc::vec;
 
   use crate::ConfigurationMarshal;
 
@@ -98,7 +98,7 @@ mod m24c64 {
   }
 
   pub enum M24C64ConfigurationError<E> {
-    Deku(DekuError),
+    Serialisation,
     I2C(E),
     BlankEeprom
   }
@@ -112,14 +112,19 @@ mod m24c64 {
 
   impl<'a, I2C, Delay, Config, E> ConfigurationMarshal<Config> for M24C64ConfigurationMarshal<I2C, Delay>
   where
-    Config: DekuContainerRead<'a> + DekuContainerWrite + Default,
+    Config: BinMarshal + Default + Clone,
     I2C: i2c::Write<u8, Error = E> + i2c::WriteRead<u8, Error = E>,
     Delay: DelayMs<u16>
   {
     type Error = M24C64ConfigurationError<E>;
 
     fn write(&mut self, config: &Config) -> Result<(), Self::Error> {
-      let bytes = config.to_bytes().map_err(|e| Self::Error::Deku(e))?;
+      // let bytes = config.to_bytes().map_err(|e| Self::Error::Deku(e))?;
+      let mut writer = VecBitWriter::new();
+      if !config.clone().write(&mut writer, ()) {
+        return Err(Self::Error::Serialisation);
+      }
+      let bytes = writer.slice();
       self.eeprom.write(self.address_offset, &(bytes.len() as u16).to_le_bytes(), &mut self.delay).map_err(|e| Self::Error::I2C(e))?;
       self.eeprom.write(self.address_offset + 0x02, &bytes[..], &mut self.delay).map_err(|e| Self::Error::I2C(e))?;
       Ok(())
@@ -135,17 +140,10 @@ mod m24c64 {
 
       let mut buf = vec![0u8; u16::from_le_bytes(len_buf) as usize];
       self.eeprom.read(self.address_offset + 0x02, &mut buf[..]).map_err(|e| Self::Error::I2C(e))?;
-      unsafe {
-        // Why the unsafe call to mem::transmute? Well, for some reason DekuContainerRead / DekuRead both enforce a borrow lifetime on the entire object, 
-        // where it only requires it for the ::from_bytes() function. This means the buf would have to outlive the function, when it obviously doesn't
-        // need to. Hence, we do an unsafe lifetime cast to make the compiler think that the type lives longer than it actually does. Because Config
-        // is owned, and we drop the returned reference, this is actually safe. 
-        let b = core::mem::transmute::<&Vec<u8>, &'a Vec<u8>>(&buf);
-        match Config::from_bytes((&b, 0)) {
-          Ok((_, c)) => Ok(c),
-          Err(e) => Err(Self::Error::Deku(e)),
-        }
+      match Config::read(&mut BitView::new(&buf), ()) {
+        Some(c) => Ok(c),
+        None => Err(Self::Error::Serialisation),
       }
     }
-}
+  }
 }
