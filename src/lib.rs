@@ -81,7 +81,7 @@ where
 }
 
 #[cfg(feature = "m24c64")]
-mod m24c64 {
+pub mod m24c64 {
   extern crate alloc;
 
   use binmarshal::{BinMarshal, rw::{VecBitWriter, BitWriter, BitView}};
