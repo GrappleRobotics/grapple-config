@@ -11,6 +11,17 @@ pub trait ConfigurationMarshal<Config>
   fn read(&mut self) -> Result<Config, Self::Error>;
 }
 
+pub trait GenericConfigurationProvider<Config>
+where
+  Config: Clone
+{
+  fn commit(&mut self) -> bool;
+  fn current(&self) -> &Config;
+  fn current_mut(&mut self) -> &mut Config;
+  fn applied(&self) -> &Option<Config>;
+  fn apply(&mut self);
+}
+
 pub struct ConfigurationProvider<Config, Marshal> {
   volatile: Config,
   last_applied: Option<Config>,
@@ -35,24 +46,30 @@ where
       },
     }
   }
+}
 
-  pub fn commit(&mut self) -> Result<(), Marshal::Error> {
-    self.marshal.write(&self.volatile)
+impl<Config, Marshal> GenericConfigurationProvider<Config> for ConfigurationProvider<Config, Marshal>
+where
+  Config: Default + Clone,
+  Marshal: ConfigurationMarshal<Config>
+{
+  fn commit(&mut self) -> bool {
+    self.marshal.write(&self.volatile).is_ok()
   }
 
-  pub fn current(&self) -> &Config {
+  fn current(&self) -> &Config {
     &self.volatile
   }
 
-  pub fn current_mut(&mut self) -> &mut Config {
+  fn current_mut(&mut self) -> &mut Config {
     &mut self.volatile
   }
 
-  pub fn applied(&self) -> &Option<Config> {
+  fn applied(&self) -> &Option<Config> {
     &self.last_applied
   }
 
-  pub fn apply(&mut self) {
+  fn apply(&mut self) {
     self.last_applied = Some(self.volatile.clone());
   }
 }
