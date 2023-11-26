@@ -18,13 +18,10 @@ where
   fn commit(&mut self) -> bool;
   fn current(&self) -> &Config;
   fn current_mut(&mut self) -> &mut Config;
-  fn applied(&self) -> &Option<Config>;
-  fn apply(&mut self);
 }
 
 pub struct ConfigurationProvider<Config, Marshal> {
   volatile: Config,
-  last_applied: Option<Config>,
   marshal: Marshal
 }
 
@@ -37,12 +34,12 @@ where
     let current = marshal.read();
     match current {
       Ok(c) => {
-        Ok(Self { marshal, volatile: c, last_applied: None })
+        Ok(Self { marshal, volatile: c })
       },
       Err(_) => {
         let c = Config::default();
         marshal.write(&c)?;
-        Ok(Self { marshal, volatile: c, last_applied: None })
+        Ok(Self { marshal, volatile: c })
       },
     }
   }
@@ -63,14 +60,6 @@ where
 
   fn current_mut(&mut self) -> &mut Config {
     &mut self.volatile
-  }
-
-  fn applied(&self) -> &Option<Config> {
-    &self.last_applied
-  }
-
-  fn apply(&mut self) {
-    self.last_applied = Some(self.volatile.clone());
   }
 }
 
