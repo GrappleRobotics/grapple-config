@@ -146,6 +146,7 @@ use binmarshal::{BinMarshal, rw::{VecBitWriter, BitWriter, BitView}};
       }
       let bytes = writer.slice();
       self.eeprom.write(self.address_offset, &(bytes.len() as u16).to_le_bytes(), &mut self.delay).map_err(|e| Self::Error::I2C(e))?;
+      self.delay.delay_ms(10u16);
       self.eeprom.write(self.address_offset + 0x02, &bytes[..], &mut self.delay).map_err(|e| Self::Error::I2C(e))?;
       Ok(())
     }
