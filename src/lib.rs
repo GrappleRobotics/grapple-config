@@ -92,7 +92,7 @@ pub mod m24c64 {
 
   use core::marker::PhantomData;
 
-use binmarshal::{BinMarshal, rw::{VecBitWriter, BitWriter, BitView}};
+  use binmarshal::{BinMarshal, rw::{VecBitWriter, BitWriter, BitView}};
   use embedded_hal::blocking::{i2c, delay::DelayMs};
   use grapple_m24c64::M24C64;
   use alloc::vec;
