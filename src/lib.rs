@@ -92,7 +92,7 @@ pub mod m24c64 {
 
   use core::marker::PhantomData;
 
-  use binmarshal::{BinMarshal, rw::{VecBitWriter, BitWriter, BitView}};
+  use binmarshal::{rw::{VecBitWriter, BitWriter, BitView}, Demarshal, DemarshalOwned, Marshal};
   use embedded_hal::blocking::{i2c, delay::DelayMs};
   use grapple_m24c64::M24C64;
   use alloc::vec;
@@ -121,7 +121,7 @@ pub mod m24c64 {
 
   impl<'a, I2C, Delay, Config, E> ConfigurationMarshal<Config> for M24C64ConfigurationMarshal<Config, I2C, Delay>
   where
-    Config: BinMarshal + Default + Clone,
+    Config: Marshal<()> + DemarshalOwned + Default + Clone,
     I2C: i2c::Write<u8, Error = E> + i2c::WriteRead<u8, Error = E>,
     Delay: DelayMs<u16>
   {
@@ -130,7 +130,7 @@ pub mod m24c64 {
     fn write(&mut self, config: &Config) -> Result<(), Self::Error> {
       // let bytes = config.to_bytes().map_err(|e| Self::Error::Deku(e))?;
       let mut writer = VecBitWriter::new();
-      if !config.clone().write(&mut writer, ()) {
+      if config.clone().write(&mut writer, ()).is_err() {
         return Err(Self::Error::Serialisation);
       }
       let bytes = writer.slice();
@@ -151,8 +151,8 @@ pub mod m24c64 {
       let mut buf = vec![0u8; u16::from_le_bytes(len_buf) as usize];
       self.eeprom.read(self.address_offset + 0x02, &mut buf[..]).map_err(|e| Self::Error::I2C(e))?;
       match Config::read(&mut BitView::new(&buf), ()) {
-        Some(c) => Ok(c),
-        None => Err(Self::Error::Serialisation),
+        Ok(c) => Ok(c),
+        Err(_) => Err(Self::Error::Serialisation),
       }
     }
   }
