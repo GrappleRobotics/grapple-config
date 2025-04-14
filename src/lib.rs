@@ -22,7 +22,8 @@ where
 
 pub struct ConfigurationProvider<Config, Marshal> {
   volatile: Config,
-  marshal: Marshal
+  marshal: Marshal,
+  max_retries: usize,
 }
 
 impl<Config, Marshal> ConfigurationProvider<Config, Marshal>
@@ -34,14 +35,18 @@ where
     let current = marshal.read();
     match current {
       Ok(c) => {
-        Ok(Self { marshal, volatile: c })
+        Ok(Self { marshal, volatile: c, max_retries: 5 })
       },
       Err(_) => {
         let c = Config::default();
         marshal.write(&c)?;
-        Ok(Self { marshal, volatile: c })
+        Ok(Self { marshal, volatile: c, max_retries: 5 })
       },
     }
+  }
+
+  pub fn set_retries(&mut self, retries: usize) {
+    self.max_retries = retries
   }
 }
 
@@ -51,7 +56,14 @@ where
   Marshal: ConfigurationMarshal<Config>
 {
   fn commit(&mut self) -> bool {
-    self.marshal.write(&self.volatile).is_ok()
+    let mut i = 0;
+    while self.marshal.write(&self.volatile).is_err() {
+      i = i + 1;
+      if i >= self.max_retries {
+        return false;
+      }
+    }
+    return true;
   }
 
   fn current(&self) -> &Config {
@@ -133,10 +145,12 @@ pub mod m24c64 {
       if config.clone().write(&mut writer, ()).is_err() {
         return Err(Self::Error::Serialisation);
       }
+      self.delay.delay_ms(10u16);
       let bytes = writer.slice();
       self.eeprom.write(self.address_offset, &(bytes.len() as u16).to_le_bytes(), &mut self.delay).map_err(|e| Self::Error::I2C(e))?;
       self.delay.delay_ms(10u16);
       self.eeprom.write(self.address_offset + 0x02, &bytes[..], &mut self.delay).map_err(|e| Self::Error::I2C(e))?;
+      self.delay.delay_ms(10u16);
       Ok(())
     }
 
