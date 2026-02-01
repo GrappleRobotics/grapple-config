@@ -1,0 +1,5 @@
+{
+  "rust-analyzer.cargo.features": [
+    "m24c64"
+  ]
+}

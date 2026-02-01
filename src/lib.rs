@@ -2,22 +2,83 @@
 
 #![doc = include_str!("../README.md")]
 
-use core::{convert::Infallible, marker::PhantomData};
+use core::marker::PhantomData;
+
+#[derive(Debug)]
+pub enum ConfigurationError {
+  BusError,
+  SerialisationError,
+  BlankError
+}
+
+impl ConfigurationError {
+  fn can_retry(&self) -> bool {
+    match self {
+      ConfigurationError::BusError => true,
+      ConfigurationError::SerialisationError => false,
+      ConfigurationError::BlankError => false
+    }
+  }
+}
 
 pub trait ConfigurationMarshal<Config>
 {
-  type Error;
+  type Error: Into<ConfigurationError>;
+
   fn write(&mut self, config: &Config) -> Result<(), Self::Error>;
   fn read(&mut self) -> Result<Config, Self::Error>;
+
+  fn write_with_retry(&mut self, config: &Config, retries: usize) -> Result<(), ConfigurationError> {
+    let mut i = 0;
+
+    while let Err(e) = self.write(&config) {
+      let config_err = e.into();
+      if !config_err.can_retry() {
+        return Err(config_err)
+      }
+
+      i = i + 1;
+      if i >= retries {
+        return Err(config_err)
+      }
+    }
+
+    return Ok(());
+  }
+
+  fn read_with_retry(&mut self, retries: usize) -> Result<Config, ConfigurationError> {
+    let mut i = 0;
+
+    loop {
+      match self.read() {
+        Ok(cfg) => {
+          return Ok(cfg)
+        },
+        Err(e) => {
+          let config_err = e.into();
+          if !config_err.can_retry() {
+            return Err(config_err)
+          }
+
+          i = i + 1;
+          if i >= retries {
+            return Err(config_err)
+          }
+        }
+      }
+    }
+  }
 }
 
 pub trait GenericConfigurationProvider<Config>
 where
   Config: Clone
 {
-  fn commit(&mut self) -> bool;
   fn current(&self) -> &Config;
   fn current_mut(&mut self) -> &mut Config;
+
+  fn commit(&mut self, reload: bool) -> Result<(), ConfigurationError>;
+  fn reload(&mut self) -> Result<(), ConfigurationError>;
 }
 
 pub struct ConfigurationProvider<Config, Marshal> {
@@ -31,16 +92,31 @@ where
   Config: Default + Clone,
   Marshal: ConfigurationMarshal<Config>
 {
-  pub fn new(mut marshal: Marshal) -> Result<Self, Marshal::Error> {
-    let current = marshal.read();
+  pub fn new(mut marshal: Marshal, max_retries: usize, load_default_if_blank: bool) -> Result<Self, ConfigurationError> {
+    let current = marshal.read_with_retry(5);
     match current {
-      Ok(c) => {
-        Ok(Self { marshal, volatile: c, max_retries: 5 })
-      },
-      Err(_) => {
+      Ok(c) => Ok(Self { volatile: c, marshal, max_retries }),
+      Err(ConfigurationError::BlankError) if load_default_if_blank => {
         let c = Config::default();
-        marshal.write(&c)?;
-        Ok(Self { marshal, volatile: c, max_retries: 5 })
+        marshal.write_with_retry(&c, max_retries)?;
+        Ok(Self { volatile: c, marshal, max_retries })
+      },
+      Err(e) => Err(e)
+    }
+  }
+
+  // Will also load default if the config is invalid (such as via an upgrade)
+  pub fn new_or_default(mut marshal: Marshal, max_retries: usize) -> Result<Self, ConfigurationError> {
+    let current = marshal.read_with_retry(5);
+    match current {
+      Ok(c) => Ok(Self { volatile: c, marshal, max_retries }),
+      Err(ConfigurationError::BusError) => {
+        Err(ConfigurationError::BusError)
+      },
+      Err(e) => {
+        let c = Config::default();
+        marshal.write_with_retry(&c, max_retries)?;
+        Ok(Self { volatile: c, marshal, max_retries })
       },
     }
   }
@@ -55,23 +131,27 @@ where
   Config: Default + Clone,
   Marshal: ConfigurationMarshal<Config>
 {
-  fn commit(&mut self) -> bool {
-    let mut i = 0;
-    while self.marshal.write(&self.volatile).is_err() {
-      i = i + 1;
-      if i >= self.max_retries {
-        return false;
-      }
-    }
-    return true;
-  }
-
   fn current(&self) -> &Config {
     &self.volatile
   }
 
   fn current_mut(&mut self) -> &mut Config {
     &mut self.volatile
+  }
+
+  fn commit(&mut self, reload: bool) -> Result<(), ConfigurationError> {
+    self.marshal.write_with_retry(&self.volatile, self.max_retries)?;
+
+    if reload {
+      self.reload()?;
+    }
+
+    Ok(())
+  }
+
+  fn reload(&mut self) -> Result<(), ConfigurationError> {
+    self.volatile = self.marshal.read_with_retry(self.max_retries)?;
+    Ok(())
   }
 }
 
@@ -87,7 +167,7 @@ impl<Config> ConfigurationMarshal<Config> for VolatileMarshal<Config>
 where
   Config: Default
 {
-  type Error = Infallible;
+  type Error = ConfigurationError;
 
   fn write(&mut self, _config: &Config) -> Result<(), Self::Error> {
     Ok(())
@@ -104,12 +184,12 @@ pub mod m24c64 {
 
   use core::marker::PhantomData;
 
-  use binmarshal::{rw::{VecBitWriter, BitWriter, BitView}, Demarshal, DemarshalOwned, Marshal};
+  use binmarshal::{DemarshalOwned, Marshal, MarshalError, rw::{BitView, BitWriter, VecBitWriter}};
   use embedded_hal::blocking::{i2c, delay::DelayMs};
   use grapple_m24c64::M24C64;
   use alloc::vec;
 
-  use crate::ConfigurationMarshal;
+  use crate::{ConfigurationError, ConfigurationMarshal};
 
   pub struct M24C64ConfigurationMarshal<Config, I2C, Delay> {
     delay: Delay,
@@ -118,16 +198,27 @@ pub mod m24c64 {
     marker: PhantomData<Config>
   }
 
-  pub enum M24C64ConfigurationError<E> {
-    Serialisation,
+  #[derive(Debug)]
+  pub enum M24C64ConfigurationError<E, SErr> {
+    Serialisation(SErr),
     I2C(E),
     BlankEeprom
   }
 
+  impl<E, SErr> Into<ConfigurationError> for M24C64ConfigurationError<E, SErr> {
+    fn into(self) -> ConfigurationError {
+      match self {
+        M24C64ConfigurationError::Serialisation(_) => ConfigurationError::SerialisationError,
+        M24C64ConfigurationError::I2C(_) => ConfigurationError::BusError,
+        M24C64ConfigurationError::BlankEeprom => ConfigurationError::BlankError,
+      }
+    }
+  }
+
   impl<Config, I2C, Delay> M24C64ConfigurationMarshal<Config, I2C, Delay> {
     #[allow(unused)]
-    pub fn new(eeprom: M24C64<I2C>, address: usize, delay: Delay, marker: PhantomData<Config>) -> Self {
-      Self { delay, address_offset: address, eeprom, marker }
+    pub fn new(eeprom: M24C64<I2C>, address: usize, delay: Delay) -> Self {
+      Self { delay, address_offset: address, eeprom, marker: PhantomData }
     }
   }
 
@@ -137,13 +228,12 @@ pub mod m24c64 {
     I2C: i2c::Write<u8, Error = E> + i2c::WriteRead<u8, Error = E>,
     Delay: DelayMs<u16>
   {
-    type Error = M24C64ConfigurationError<E>;
+    type Error = M24C64ConfigurationError<E, MarshalError>;
 
     fn write(&mut self, config: &Config) -> Result<(), Self::Error> {
-      // let bytes = config.to_bytes().map_err(|e| Self::Error::Deku(e))?;
       let mut writer = VecBitWriter::new();
-      if config.clone().write(&mut writer, ()).is_err() {
-        return Err(Self::Error::Serialisation);
+      if let Err(e) = config.clone().write(&mut writer, ()) {
+        return Err(Self::Error::Serialisation(e));
       }
       self.delay.delay_ms(10u16);
       let bytes = writer.slice();
@@ -156,6 +246,7 @@ pub mod m24c64 {
 
     fn read(&mut self) -> Result<Config, Self::Error> {
       let mut len_buf = [0u8; 2];
+      self.delay.delay_ms(1u16);
       self.eeprom.read(self.address_offset, &mut len_buf[..]).map_err(|e| Self::Error::I2C(e))?;
 
       if len_buf[0] == 255 && len_buf[1] == 255 {
@@ -166,7 +257,7 @@ pub mod m24c64 {
       self.eeprom.read(self.address_offset + 0x02, &mut buf[..]).map_err(|e| Self::Error::I2C(e))?;
       match Config::read(&mut BitView::new(&buf), ()) {
         Ok(c) => Ok(c),
-        Err(_) => Err(Self::Error::Serialisation),
+        Err(e) => Err(Self::Error::Serialisation(e)),
       }
     }
   }
